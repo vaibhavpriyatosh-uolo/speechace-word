@@ -290,11 +290,11 @@ export default function SimpleAudioRecorder({
         <h4>📋 Instructions:</h4>
         <ol>
           <li>Ensure your microphone is connected</li>
-          <li>Click <strong>"Start Recording"</strong> button</li>
+          <li>Click <strong>&quot;Start Recording&quot;</strong> button</li>
           <li>Allow microphone permission when prompted</li>
           <li>Speak clearly into your microphone</li>
           <li>Audio is automatically sent in 1-second chunks</li>
-          <li>Click <strong>"Stop Recording"</strong> when done</li>
+          <li>Click <strong>&quot;Stop Recording&quot;</strong> when done</li>
         </ol>
         <p className="tech-note">
           <strong>Technical:</strong> Audio is captured at 16kHz mono, optimized for speech recognition

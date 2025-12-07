@@ -27,6 +27,7 @@ export default function SpeechDetectionPage() {
     }
 
     return () => stopPolling();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSessionId]);
 
   const fetchSessions = async () => {

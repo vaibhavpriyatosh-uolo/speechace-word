@@ -140,12 +140,12 @@ export default function AudioRecorder({ sessionId, serverUrl }: AudioRecorderPro
           <strong>How it works:</strong>
         </p>
         <ol>
-          <li>Click "Connect to Server" to establish connection</li>
-          <li>Click "Start Recording" to begin audio capture</li>
+          <li>Click &quot;Connect to Server&quot; to establish connection</li>
+          <li>Click &quot;Start Recording&quot; to begin audio capture</li>
           <li>Speak into your microphone</li>
           <li>Audio chunks are sent to the server for processing</li>
           <li>Recognized words will appear in the session below</li>
-          <li>Click "Stop Recording" when done</li>
+          <li>Click &quot;Stop Recording&quot; when done</li>
         </ol>
       </div>
     </div>
