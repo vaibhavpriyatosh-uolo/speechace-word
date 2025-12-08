@@ -540,6 +540,26 @@ a {
   animation: pulse-dot 2s ease-in-out infinite;
 }
 
+.speaking-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: rgba(255, 165, 0, 0.2);
+  border-radius: 20px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #ffa500;
+}
+
+.speaking-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffa500;
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
 .listening-animation {
   display: flex;
   flex-direction: column;
@@ -734,6 +754,130 @@ a {
   font-size: 1rem;
   line-height: 1.6;
   word-wrap: break-word;
+}
+
+/* GPT Enhanced Text Styles */
+.gpt-enhanced-container {
+  background: rgba(255, 215, 0, 0.15);
+  border: 2px solid rgba(255, 215, 0, 0.3);
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin: 2rem 0;
+  backdrop-filter: blur(10px);
+  max-height: 500px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.gpt-enhanced-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid rgba(255, 215, 0, 0.3);
+}
+
+.gpt-icon {
+  font-size: 1.5rem;
+}
+
+.gpt-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  flex: 1;
+  color: #ffd700;
+}
+
+.gpt-count {
+  background: rgba(255, 215, 0, 0.25);
+  padding: 0.25rem 0.75rem;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #ffd700;
+}
+
+.gpt-processing {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0.75rem;
+  background: rgba(255, 215, 0, 0.2);
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #ffd700;
+}
+
+.gpt-enhanced-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow-y: auto;
+  max-height: 350px;
+  padding-right: 0.5rem;
+}
+
+.gpt-enhanced-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.gpt-enhanced-list::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.gpt-enhanced-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 215, 0, 0.4);
+  border-radius: 4px;
+}
+
+.gpt-enhanced-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 215, 0, 0.6);
+}
+
+.gpt-enhanced-item {
+  display: flex;
+  gap: 1rem;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 8px;
+  padding: 1rem;
+  animation: slideIn 0.5s ease-out;
+  transition: all 0.2s ease;
+  border-left: 3px solid rgba(255, 215, 0, 0.5);
+}
+
+.gpt-enhanced-item:hover {
+  background: rgba(0, 0, 0, 0.3);
+  transform: translateX(4px);
+  border-left-color: #ffd700;
+}
+
+.gpt-enhanced-number {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 215, 0, 0.3);
+  border-radius: 8px;
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: #ffd700;
+}
+
+.gpt-enhanced-text {
+  flex: 1;
+  color: #fff;
+  font-size: 1rem;
+  line-height: 1.6;
+  word-wrap: break-word;
+  font-weight: 400;
 }
 
 /* Tap Recorder Styles (legacy) */

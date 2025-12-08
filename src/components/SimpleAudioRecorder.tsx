@@ -15,8 +15,11 @@ export default function SimpleAudioRecorder({
   const [isConnected, setIsConnected] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isGptProcessing, setIsGptProcessing] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [error, setError] = useState('');
   const [transcriptions, setTranscriptions] = useState<string[]>([]);
+  const [gptEnhancedTexts, setGptEnhancedTexts] = useState<string[]>([]);
   const [audioLevel, setAudioLevel] = useState(0);
 
   const socketRef = useRef<Socket | null>(null);
@@ -25,6 +28,8 @@ export default function SimpleAudioRecorder({
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const speechSynthesisRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const wasListeningRef = useRef<boolean>(false);
 
   // Initialize Socket.io connection and create session once
   useEffect(() => {
@@ -74,6 +79,29 @@ export default function SimpleAudioRecorder({
       console.error('❌ Transcription error:', data.error);
       setError(`Transcription failed: ${data.error}`);
       setIsProcessing(false);
+
+      // Clear error after 5 seconds
+      setTimeout(() => setError(''), 5000);
+    });
+
+    socket.on('gpt-processing-started', () => {
+      console.log('🤖 GPT processing started...');
+      setIsGptProcessing(true);
+    });
+
+    socket.on('gpt-response', (data) => {
+      console.log('✨ GPT response received:', data.enhancedText);
+      setGptEnhancedTexts((prev) => [...prev, data.enhancedText]);
+      setIsGptProcessing(false);
+
+      // Play the GPT response as audio
+      speakText(data.enhancedText);
+    });
+
+    socket.on('gpt-error', (data) => {
+      console.error('❌ GPT error:', data.error);
+      setError(`GPT processing failed: ${data.error}`);
+      setIsGptProcessing(false);
 
       // Clear error after 5 seconds
       setTimeout(() => setError(''), 5000);
@@ -169,7 +197,10 @@ export default function SimpleAudioRecorder({
             console.log('⏭️ Skipping small audio chunk');
 
             // Restart recording for next chunk
-            if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
+            if (
+              mediaRecorderRef.current &&
+              mediaRecorderRef.current.state === 'inactive'
+            ) {
               mediaRecorderRef.current.start();
             }
             return;
@@ -186,7 +217,10 @@ export default function SimpleAudioRecorder({
           console.log(`📤 Sent audio chunk (${arrayBuffer.byteLength} bytes)`);
 
           // Restart recording for next chunk (creates proper WebM header)
-          if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
+          if (
+            mediaRecorderRef.current &&
+            mediaRecorderRef.current.state === 'inactive'
+          ) {
             mediaRecorderRef.current.start();
           }
         }
@@ -202,7 +236,10 @@ export default function SimpleAudioRecorder({
 
       // Set up interval to stop/restart recorder every 5 seconds for proper WebM chunks
       const recordingInterval = setInterval(() => {
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+        if (
+          mediaRecorderRef.current &&
+          mediaRecorderRef.current.state === 'recording'
+        ) {
           mediaRecorderRef.current.stop();
         }
       }, 5000);
@@ -211,12 +248,16 @@ export default function SimpleAudioRecorder({
       (mediaRecorder as any).recordingInterval = recordingInterval;
 
       setIsListening(true);
-      console.log('🎙️ Continuous listening started (5-second chunks with proper headers)');
+      console.log(
+        '🎙️ Continuous listening started (5-second chunks with proper headers)'
+      );
     } catch (err: any) {
       console.error('Error starting listening:', err);
 
       if (err.name === 'NotAllowedError') {
-        setError('Microphone permission denied. Please allow access and refresh.');
+        setError(
+          'Microphone permission denied. Please allow access and refresh.'
+        );
       } else if (err.name === 'NotFoundError') {
         setError('No microphone found. Please connect a microphone.');
       } else {
@@ -227,12 +268,18 @@ export default function SimpleAudioRecorder({
 
   const stopListening = () => {
     // Clear recording interval
-    if (mediaRecorderRef.current && (mediaRecorderRef.current as any).recordingInterval) {
+    if (
+      mediaRecorderRef.current &&
+      (mediaRecorderRef.current as any).recordingInterval
+    ) {
       clearInterval((mediaRecorderRef.current as any).recordingInterval);
     }
 
     // Stop MediaRecorder
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== 'inactive'
+    ) {
       mediaRecorderRef.current.stop();
     }
 
@@ -259,10 +306,125 @@ export default function SimpleAudioRecorder({
     console.log('🛑 Listening stopped');
   };
 
+  const pauseListening = () => {
+    // Pause recording by stopping the MediaRecorder
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state === 'recording'
+    ) {
+      mediaRecorderRef.current.pause();
+      console.log('⏸️ Listening paused');
+    }
+
+    // Clear recording interval temporarily
+    if (
+      mediaRecorderRef.current &&
+      (mediaRecorderRef.current as any).recordingInterval
+    ) {
+      clearInterval((mediaRecorderRef.current as any).recordingInterval);
+      (mediaRecorderRef.current as any).recordingInterval = null;
+    }
+  };
+
+  const resumeListening = () => {
+    // Resume recording
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state === 'paused'
+    ) {
+      mediaRecorderRef.current.resume();
+      console.log('▶️ Listening resumed');
+
+      // Restart the interval for chunking
+      const recordingInterval = setInterval(() => {
+        if (
+          mediaRecorderRef.current &&
+          mediaRecorderRef.current.state === 'recording'
+        ) {
+          mediaRecorderRef.current.stop();
+        }
+      }, 5000);
+
+      (mediaRecorderRef.current as any).recordingInterval = recordingInterval;
+    }
+  };
+
+  const speakText = (text: string) => {
+    // Check if speech synthesis is supported
+    if (!('speechSynthesis' in window)) {
+      console.error('Speech synthesis not supported in this browser');
+      return;
+    }
+
+    // Cancel any ongoing speech
+    window.speechSynthesis.cancel();
+
+    // Pause microphone listening
+    if (isListening) {
+      wasListeningRef.current = true;
+      pauseListening();
+    }
+
+    setIsSpeaking(true);
+    console.log('🔊 Speaking:', text);
+
+    // Create speech synthesis utterance
+    const utterance = new SpeechSynthesisUtterance(text);
+    speechSynthesisRef.current = utterance;
+
+    // Configure voice settings
+    utterance.rate = 1.0; // Speed of speech
+    utterance.pitch = 1.0; // Pitch of voice
+    utterance.volume = 1.0; // Volume (0 to 1)
+
+    // Get available voices and prefer English voices
+    const voices = window.speechSynthesis.getVoices();
+    const englishVoice = voices.find(
+      (voice) => voice.lang.startsWith('en-') && voice.localService
+    );
+    if (englishVoice) {
+      utterance.voice = englishVoice;
+    }
+
+    // Handle speech end event
+    utterance.onend = () => {
+      console.log('✅ Speech finished');
+      setIsSpeaking(false);
+      speechSynthesisRef.current = null;
+
+      // Resume microphone if it was listening before
+      if (wasListeningRef.current) {
+        wasListeningRef.current = false;
+        resumeListening();
+      }
+    };
+
+    // Handle speech error
+    utterance.onerror = (event) => {
+      console.error('❌ Speech synthesis error:', event);
+      setIsSpeaking(false);
+      speechSynthesisRef.current = null;
+
+      // Resume microphone even on error
+      if (wasListeningRef.current) {
+        wasListeningRef.current = false;
+        resumeListening();
+      }
+    };
+
+    // Start speaking
+    window.speechSynthesis.speak(utterance);
+  };
+
   // Clean up on unmount
   useEffect(() => {
     return () => {
       stopListening();
+
+      // Cancel any ongoing speech synthesis
+      if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
     };
   }, []);
 
@@ -270,16 +432,26 @@ export default function SimpleAudioRecorder({
     <div className="continuous-recorder">
       <div className="recorder-status-bar">
         <div className="status-left">
-          <div className={`connection-status ${isConnected ? 'connected' : 'disconnected'}`}>
+          <div
+            className={`connection-status ${
+              isConnected ? 'connected' : 'disconnected'
+            }`}
+          >
             <span className="status-dot"></span>
             <span>{isConnected ? 'Connected' : 'Disconnected'}</span>
           </div>
           <div className="session-info">Session: {sessionId}</div>
         </div>
-        {isListening && (
+        {isListening && !isSpeaking && (
           <div className="listening-indicator">
             <span className="listening-pulse"></span>
             <span>Listening...</span>
+          </div>
+        )}
+        {isSpeaking && (
+          <div className="speaking-indicator">
+            <span className="speaking-pulse"></span>
+            <span>AI Speaking...</span>
           </div>
         )}
       </div>
@@ -293,9 +465,9 @@ export default function SimpleAudioRecorder({
 
       <div className="recorder-main">
         <div className="listening-animation">
-          <div className={`mic-icon ${isListening ? 'active' : ''}`}>
-            <span>🎤</span>
-            {isListening && (
+          <div className={`mic-icon ${isListening && !isSpeaking ? 'active' : ''}`}>
+            <span>{isSpeaking ? '🔊' : '🎤'}</span>
+            {isListening && !isSpeaking && (
               <>
                 <span className="wave wave-1"></span>
                 <span className="wave wave-2"></span>
@@ -304,7 +476,11 @@ export default function SimpleAudioRecorder({
             )}
           </div>
           <div className="listening-text">
-            {isListening ? 'Listening continuously...' : 'Connecting...'}
+            {isSpeaking
+              ? 'AI is speaking...'
+              : isListening
+              ? 'Listening continuously...'
+              : 'Connecting...'}
           </div>
         </div>
 
@@ -334,7 +510,9 @@ export default function SimpleAudioRecorder({
           <div className="transcriptions-header">
             <span className="transcriptions-icon">📝</span>
             <span className="transcriptions-title">Transcriptions</span>
-            <span className="transcriptions-count">{transcriptions.length}</span>
+            <span className="transcriptions-count">
+              {transcriptions.length}
+            </span>
           </div>
           <div className="transcriptions-list">
             {transcriptions.map((text, index) => (
@@ -347,10 +525,36 @@ export default function SimpleAudioRecorder({
         </div>
       )}
 
+      {gptEnhancedTexts.length > 0 && (
+        <div className="gpt-enhanced-container">
+          <div className="gpt-enhanced-header">
+            <span className="gpt-icon">🤖</span>
+            <span className="gpt-title">GPT Response</span>
+            <span className="gpt-count">{gptEnhancedTexts.length}</span>
+            {isGptProcessing && (
+              <span className="gpt-processing">
+                <span className="spinner"></span>
+                Processing...
+              </span>
+            )}
+          </div>
+          <div className="gpt-enhanced-list">
+            {gptEnhancedTexts.map((text, index) => (
+              <div key={index} className="gpt-enhanced-item">
+                <div className="gpt-enhanced-number">#{index + 1}</div>
+                <div className="gpt-enhanced-text">{text}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="recorder-instructions">
         <h4>How it works:</h4>
         <ul>
-          <li>Microphone starts listening automatically when you select a session</li>
+          <li>
+            Microphone starts listening automatically when you select a session
+          </li>
           <li>Audio is captured in 5-second chunks</li>
           <li>Each chunk is sent to the server for transcription</li>
           <li>Transcriptions appear below as they are processed</li>

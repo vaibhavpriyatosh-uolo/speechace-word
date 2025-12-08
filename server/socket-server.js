@@ -130,6 +130,9 @@ async function processAudioAsync(sessionId, audioData, socket) {
         text: result,
         timestamp: Date.now(),
       });
+
+      // Process with GPT-4 for enhancement
+      processWithGPT(result, sessionId, socket);
     }
 
     console.log(`✅ Processing completed for session ${sessionId}`);
@@ -310,7 +313,7 @@ async function openaiSpeechToText(audioData, sessionId) {
       {
         headers: {
           ...form.getHeaders(),
-          'Authorization': `Bearer ${OPENAI_API_KEY}`,
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
         },
       }
     );
@@ -373,6 +376,71 @@ async function sendWordToAPI(sessionId, word) {
     console.log(`📝 Word saved: "${word}" for session ${sessionId}`);
   } catch (error) {
     console.error(`❌ Error saving word:`, error.message);
+  }
+}
+
+/**
+ * Process transcription with GPT-4 for enhancement
+ */
+async function processWithGPT(transcription, sessionId, socket) {
+  if (!openai) {
+    console.log('⚠️  OpenAI not configured, skipping GPT processing');
+    return;
+  }
+
+  try {
+    console.log(`🤖 Processing with GPT-4: "${transcription}"`);
+
+    // Emit processing started
+    if (socket) {
+      socket.emit('gpt-processing-started', { sessionId });
+    }
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content:
+            'You are a helpful assistant that Gives Response to the input text',
+        },
+        {
+          role: 'user',
+          content: `Answer "${transcription}"`,
+        },
+      ],
+      temperature: 0.7,
+      max_tokens: 500,
+    });
+
+    const enhancedText = completion.choices[0]?.message?.content?.trim();
+
+    if (enhancedText) {
+      console.log(`✨ GPT-4 enhanced: "${enhancedText}"`);
+
+      // Emit GPT result to frontend
+      if (socket) {
+        socket.emit('gpt-response', {
+          sessionId,
+          originalText: transcription,
+          enhancedText: enhancedText,
+          timestamp: Date.now(),
+        });
+      }
+
+      return enhancedText;
+    }
+  } catch (error) {
+    console.error(`❌ GPT processing error:`, error.message);
+
+    // Emit error to frontend
+    if (socket) {
+      socket.emit('gpt-error', {
+        sessionId,
+        error: error.message,
+        timestamp: Date.now(),
+      });
+    }
   }
 }
 
