@@ -116,17 +116,39 @@ io.on('connection', (socket) => {
 /**
  * Process audio data asynchronously without blocking incoming chunks
  */
-async function processAudioAsync(sessionId, audioData) {
+async function processAudioAsync(sessionId, audioData, socket) {
   try {
     console.log(
       `🔄 Processing ${audioData.length} bytes of audio for session ${sessionId}`
     );
-    await speechToText(audioData, sessionId);
+    const result = await speechToText(audioData, sessionId, socket);
+
+    // Emit transcription to frontend if result exists
+    if (result && socket) {
+      socket.emit('transcription', {
+        sessionId,
+        text: result,
+        timestamp: Date.now(),
+      });
+    }
+
+    console.log(`✅ Processing completed for session ${sessionId}`);
+    return result;
   } catch (error) {
     console.error(
       `❌ Error processing audio for session ${sessionId}:`,
-      error.message
+      error.message,
+      error.stack
     );
+
+    // Emit error to frontend
+    if (socket) {
+      socket.emit('transcription-error', {
+        sessionId,
+        error: error.message,
+        timestamp: Date.now(),
+      });
+    }
   }
 }
 
@@ -134,11 +156,11 @@ async function processAudioAsync(sessionId, audioData) {
  * Three-Tier Speech-to-Text Orchestrator
  * Tries each tier in sequence with automatic fallback
  */
-async function speechToText(audioData, sessionId) {
+async function speechToText(audioData, sessionId, socket) {
   // Tier 1: Try Ollama Whisper (local, free, fast)
   // try {
   //   console.log('🔄 [Tier 1] Trying Ollama Whisper (local)...');
-  //   return await ollamaSpeechToText(audioData, sessionId);
+  //   return await ollamaSpeechToText(audioData, sessionId, socket);
   // } catch (error) {
   //   console.warn(`⚠️  [Tier 1] Ollama failed: ${error.message}`);
   //   // Continue to next tier
@@ -148,7 +170,7 @@ async function speechToText(audioData, sessionId) {
   if (openai) {
     try {
       console.log('🔄 [Tier 2] Trying OpenAI Whisper (cloud)...');
-      return await openaiSpeechToText(audioData, sessionId);
+      return await openaiSpeechToText(audioData, sessionId, socket);
     } catch (error) {
       console.warn(`⚠️  [Tier 2] OpenAI failed: ${error.message}`);
       // Continue to next tier
@@ -157,7 +179,7 @@ async function speechToText(audioData, sessionId) {
 
   // Tier 3: Fallback simulation (testing only)
   console.log('🔄 [Tier 3] Using fallback simulation');
-  return await fallbackSpeechDetection(sessionId);
+  return await fallbackSpeechDetection(sessionId, socket);
 }
 
 /**
@@ -259,20 +281,41 @@ async function openaiSpeechToText(audioData, sessionId) {
 
     // Convert audio data array to Buffer
     const audioBuffer = Buffer.from(audioData);
-    console.log('OPENAI 4');
+    console.log('OPENAI 4', `Buffer size: ${audioBuffer.length} bytes`);
+
+    // Check if buffer has WebM magic bytes
+    const magicBytes = audioBuffer.slice(0, 4).toString('hex');
+    console.log('Magic bytes:', magicBytes);
+
     // Write audio to temporary file
     fs.writeFileSync(tempFile, audioBuffer);
+    console.log('File written:', fs.statSync(tempFile).size, 'bytes');
 
-    // Create a read stream for the file
-    const audioStream = fs.createReadStream(tempFile);
+    // Create a File-like object for OpenAI API using FormData approach
     console.log('OPENAI 5');
-    // Call OpenAI Whisper API
-    const transcription = await openai.audio.transcriptions.create({
-      file: audioStream,
-      model: 'whisper-1',
-      language: 'en',
-      response_format: 'json',
+    const FormData = require('form-data');
+    const form = new FormData();
+    form.append('file', fs.createReadStream(tempFile), {
+      filename: `audio-${Date.now()}.webm`,
+      contentType: 'audio/webm',
     });
+    form.append('model', 'whisper-1');
+    form.append('language', 'en');
+    form.append('response_format', 'json');
+
+    // Call OpenAI Whisper API directly with form data
+    const response = await axios.post(
+      'https://api.openai.com/v1/audio/transcriptions',
+      form,
+      {
+        headers: {
+          ...form.getHeaders(),
+          'Authorization': `Bearer ${OPENAI_API_KEY}`,
+        },
+      }
+    );
+
+    const transcription = response.data;
     console.log('OPENAI 6');
     // Clean up temporary file
     fs.unlinkSync(tempFile);
@@ -322,11 +365,11 @@ async function openaiSpeechToText(audioData, sessionId) {
  */
 async function sendWordToAPI(sessionId, word) {
   try {
-    const temp = await axios.post(`${API_URL}/speech-detection`, {
+    await axios.post(`${API_URL}/speech-detection`, {
       sessionId,
       word: word.toLowerCase(),
     });
-    console.log({ temp });
+
     console.log(`📝 Word saved: "${word}" for session ${sessionId}`);
   } catch (error) {
     console.error(`❌ Error saving word:`, error.message);

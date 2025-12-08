@@ -12,11 +12,11 @@ export default function SimpleAudioRecorder({
   sessionId,
   serverUrl,
 }: SimpleAudioRecorderProps) {
-  const [isRecording, setIsRecording] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [isListening, setIsListening] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState('');
-  const [transcribedText, setTranscribedText] = useState('');
+  const [transcriptions, setTranscriptions] = useState<string[]>([]);
   const [audioLevel, setAudioLevel] = useState(0);
 
   const socketRef = useRef<Socket | null>(null);
@@ -25,7 +25,6 @@ export default function SimpleAudioRecorder({
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
 
   // Initialize Socket.io connection and create session once
   useEffect(() => {
@@ -67,8 +66,17 @@ export default function SimpleAudioRecorder({
 
     socket.on('transcription', (data) => {
       console.log('📝 Transcription received:', data.text);
-      setTranscribedText(data.text);
+      setTranscriptions((prev) => [...prev, data.text]);
       setIsProcessing(false);
+    });
+
+    socket.on('transcription-error', (data) => {
+      console.error('❌ Transcription error:', data.error);
+      setError(`Transcription failed: ${data.error}`);
+      setIsProcessing(false);
+
+      // Clear error after 5 seconds
+      setTimeout(() => setError(''), 5000);
     });
 
     return () => {
@@ -79,6 +87,13 @@ export default function SimpleAudioRecorder({
       socket.disconnect();
     };
   }, [serverUrl, sessionId]);
+
+  // Start listening automatically when connected
+  useEffect(() => {
+    if (isConnected && !isListening) {
+      startListening();
+    }
+  }, [isConnected]);
 
   // Visualize audio level
   const visualizeAudio = () => {
@@ -94,11 +109,9 @@ export default function SimpleAudioRecorder({
     animationFrameRef.current = requestAnimationFrame(visualizeAudio);
   };
 
-  const startRecording = async () => {
+  const startListening = async () => {
     try {
       setError('');
-      setTranscribedText('');
-      audioChunksRef.current = [];
 
       // Request microphone access
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -137,7 +150,7 @@ export default function SimpleAudioRecorder({
         }
       }
 
-      // Create MediaRecorder
+      // Create MediaRecorder with 5-second chunks
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType,
         audioBitsPerSecond: 16000,
@@ -145,32 +158,38 @@ export default function SimpleAudioRecorder({
 
       mediaRecorderRef.current = mediaRecorder;
 
-      // Collect audio chunks
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
+      // Collect and send audio chunks - restart recorder for proper WebM headers
+      mediaRecorder.ondataavailable = async (event) => {
+        if (event.data.size > 0 && socketRef.current?.connected) {
+          // Convert to array buffer
+          const arrayBuffer = await event.data.arrayBuffer();
 
-      mediaRecorder.onstop = async () => {
-        console.log('🎙️ Recording stopped, processing audio...');
+          // Skip if audio is too small (less than 1KB)
+          if (arrayBuffer.byteLength < 1000) {
+            console.log('⏭️ Skipping small audio chunk');
 
-        // Combine all chunks into a single blob
-        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+            // Restart recording for next chunk
+            if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
+              mediaRecorderRef.current.start();
+            }
+            return;
+          }
 
-        // Convert to array buffer
-        const arrayBuffer = await audioBlob.arrayBuffer();
-        const uint8Array = new Uint8Array(arrayBuffer);
+          const uint8Array = new Uint8Array(arrayBuffer);
 
-        // Send to server for processing
-        if (socketRef.current?.connected) {
+          // Send to server for processing
           socketRef.current.emit('audio-data', {
             sessionId,
             audioData: Array.from(uint8Array),
           });
-        }
 
-        audioChunksRef.current = [];
+          console.log(`📤 Sent audio chunk (${arrayBuffer.byteLength} bytes)`);
+
+          // Restart recording for next chunk (creates proper WebM header)
+          if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
+            mediaRecorderRef.current.start();
+          }
+        }
       };
 
       mediaRecorder.onerror = (event) => {
@@ -178,24 +197,40 @@ export default function SimpleAudioRecorder({
         setError('Recording error occurred');
       };
 
-      // Start recording
+      // Start recording - will auto-restart after each chunk
       mediaRecorder.start();
-      setIsRecording(true);
-      console.log('🎙️ Recording started');
+
+      // Set up interval to stop/restart recorder every 5 seconds for proper WebM chunks
+      const recordingInterval = setInterval(() => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+          mediaRecorderRef.current.stop();
+        }
+      }, 5000);
+
+      // Store interval ref for cleanup
+      (mediaRecorder as any).recordingInterval = recordingInterval;
+
+      setIsListening(true);
+      console.log('🎙️ Continuous listening started (5-second chunks with proper headers)');
     } catch (err: any) {
-      console.error('Error starting recording:', err);
+      console.error('Error starting listening:', err);
 
       if (err.name === 'NotAllowedError') {
-        setError('Microphone permission denied. Please allow access.');
+        setError('Microphone permission denied. Please allow access and refresh.');
       } else if (err.name === 'NotFoundError') {
         setError('No microphone found. Please connect a microphone.');
       } else {
-        setError('Failed to start recording. Please try again.');
+        setError('Failed to start listening. Please try again.');
       }
     }
   };
 
-  const stopRecording = () => {
+  const stopListening = () => {
+    // Clear recording interval
+    if (mediaRecorderRef.current && (mediaRecorderRef.current as any).recordingInterval) {
+      clearInterval((mediaRecorderRef.current as any).recordingInterval);
+    }
+
     // Stop MediaRecorder
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
@@ -219,13 +254,20 @@ export default function SimpleAudioRecorder({
       animationFrameRef.current = null;
     }
 
-    setIsRecording(false);
+    setIsListening(false);
     setAudioLevel(0);
-    console.log('🛑 Recording stopped');
+    console.log('🛑 Listening stopped');
   };
 
+  // Clean up on unmount
+  useEffect(() => {
+    return () => {
+      stopListening();
+    };
+  }, []);
+
   return (
-    <div className="tap-recorder">
+    <div className="continuous-recorder">
       <div className="recorder-status-bar">
         <div className="status-left">
           <div className={`connection-status ${isConnected ? 'connected' : 'disconnected'}`}>
@@ -234,10 +276,10 @@ export default function SimpleAudioRecorder({
           </div>
           <div className="session-info">Session: {sessionId}</div>
         </div>
-        {isProcessing && (
-          <div className="processing-indicator">
-            <span className="spinner"></span>
-            <span>Processing...</span>
+        {isListening && (
+          <div className="listening-indicator">
+            <span className="listening-pulse"></span>
+            <span>Listening...</span>
           </div>
         )}
       </div>
@@ -250,30 +292,23 @@ export default function SimpleAudioRecorder({
       )}
 
       <div className="recorder-main">
-        <div className="tap-button-container">
-          {!isRecording ? (
-            <button
-              className="tap-button"
-              onClick={startRecording}
-              disabled={!isConnected}
-            >
-              <div className="tap-button-inner">
-                <span className="tap-icon">🎤</span>
-                <span className="tap-text">Tap to Record</span>
-              </div>
-            </button>
-          ) : (
-            <button className="tap-button recording" onClick={stopRecording}>
-              <div className="tap-button-inner">
-                <span className="pulse-ring"></span>
-                <span className="tap-icon">⏹️</span>
-                <span className="tap-text">Tap to Stop</span>
-              </div>
-            </button>
-          )}
+        <div className="listening-animation">
+          <div className={`mic-icon ${isListening ? 'active' : ''}`}>
+            <span>🎤</span>
+            {isListening && (
+              <>
+                <span className="wave wave-1"></span>
+                <span className="wave wave-2"></span>
+                <span className="wave wave-3"></span>
+              </>
+            )}
+          </div>
+          <div className="listening-text">
+            {isListening ? 'Listening continuously...' : 'Connecting...'}
+          </div>
         </div>
 
-        {isRecording && (
+        {isListening && (
           <div className="audio-visualizer-container">
             <div className="visualizer-label">Audio Level</div>
             <div className="visualizer-bar-outer">
@@ -285,26 +320,42 @@ export default function SimpleAudioRecorder({
             <div className="visualizer-value">{Math.round(audioLevel)}%</div>
           </div>
         )}
+
+        {isProcessing && (
+          <div className="processing-indicator-card">
+            <span className="spinner"></span>
+            <span>Processing audio...</span>
+          </div>
+        )}
       </div>
 
-      {transcribedText && (
-        <div className="transcription-result">
-          <div className="transcription-header">
-            <span className="transcription-icon">📝</span>
-            <span className="transcription-title">Transcription</span>
+      {transcriptions.length > 0 && (
+        <div className="transcriptions-container">
+          <div className="transcriptions-header">
+            <span className="transcriptions-icon">📝</span>
+            <span className="transcriptions-title">Transcriptions</span>
+            <span className="transcriptions-count">{transcriptions.length}</span>
           </div>
-          <div className="transcription-content">{transcribedText}</div>
+          <div className="transcriptions-list">
+            {transcriptions.map((text, index) => (
+              <div key={index} className="transcription-item">
+                <div className="transcription-number">#{index + 1}</div>
+                <div className="transcription-text">{text}</div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
       <div className="recorder-instructions">
-        <h4>How to use:</h4>
-        <ol>
-          <li>Tap the <strong>"Tap to Record"</strong> button to start recording</li>
-          <li>Speak clearly into your microphone</li>
-          <li>Tap <strong>"Tap to Stop"</strong> when finished</li>
-          <li>Wait for the transcription to appear below</li>
-        </ol>
+        <h4>How it works:</h4>
+        <ul>
+          <li>Microphone starts listening automatically when you select a session</li>
+          <li>Audio is captured in 5-second chunks</li>
+          <li>Each chunk is sent to the server for transcription</li>
+          <li>Transcriptions appear below as they are processed</li>
+          <li>Keep speaking naturally - the system is always listening</li>
+        </ul>
       </div>
     </div>
   );
