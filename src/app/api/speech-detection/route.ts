@@ -101,13 +101,18 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const session = globalSpeechSession[sessionId];
+  let session = globalSpeechSession[sessionId];
 
+  // Auto-create session if it doesn't exist
   if (!session) {
-    return NextResponse.json(
-      { success: false, error: 'Session not found' },
-      { status: 404 }
-    );
+    globalSpeechSession[sessionId] = {
+      sessionId,
+      words: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    session = globalSpeechSession[sessionId];
+    console.log(`✨ Auto-created session: ${sessionId}`);
   }
 
   return NextResponse.json({

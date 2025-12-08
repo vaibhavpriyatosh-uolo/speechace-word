@@ -9,8 +9,9 @@ const fs = require('fs');
 const path = require('path');
 
 const PORT = process.env.SOCKET_PORT || 4000;
-const API_URL = process.env.API_URL || 'http://localhost:3001/api';
+const API_URL = process.env.API_URL || 'http://localhost:3000/api';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+console.log({ OPENAI_API_KEY });
 // Initialize OpenAI client
 const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
 
@@ -24,8 +25,14 @@ const httpServer = createServer();
 // Create Socket.io server with CORS
 const io = new Server(httpServer, {
   cors: {
-    origin: '*', // Allow all origins for development
+    origin:
+      process.env.NODE_ENV === 'production'
+        ? [process.env.FRONTEND_URL, process.env.NEXT_PUBLIC_API_URL].filter(
+            Boolean
+          )
+        : '*', // Allow all origins for development
     methods: ['GET', 'POST'],
+    credentials: true,
   },
 });
 
@@ -399,11 +406,11 @@ async function openaiSpeechToText(audioData, sessionId) {
  */
 async function sendWordToAPI(sessionId, word) {
   try {
-    await axios.post(`${API_URL}/speech-detection`, {
+    const temp = await axios.post(`${API_URL}/speech-detection`, {
       sessionId,
       word: word.toLowerCase(),
     });
-
+    console.log({ temp });
     console.log(`📝 Word saved: "${word}" for session ${sessionId}`);
   } catch (error) {
     console.error(`❌ Error saving word:`, error.message);

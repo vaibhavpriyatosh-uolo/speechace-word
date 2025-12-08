@@ -129,7 +129,7 @@ export default function SpeechDetectionPage() {
           <div className="audio-recorder-section">
             <SimpleAudioRecorder
               sessionId={selectedSessionId}
-              serverUrl={process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || 'http://localhost:4000'}
+              serverUrl={process.env.NEXT_PUBLIC_SOCKET_SERVER_URL || ''}
             />
           </div>
         )}
