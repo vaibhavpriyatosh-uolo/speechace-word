@@ -8,6 +8,11 @@ interface SimpleAudioRecorderProps {
   serverUrl: string;
 }
 
+// Constants for enhanced audio detection
+const SILENCE_THRESHOLD = 0.05; // RMS threshold for silence detection
+const MIN_SILENCE_DURATION = 1000; // Minimum 1 second of silence before resuming
+const MAX_RESUME_WAIT = 10000; // Maximum 10 seconds before forcing resume
+
 export default function SimpleAudioRecorder({
   sessionId,
   serverUrl,
@@ -30,6 +35,7 @@ export default function SimpleAudioRecorder({
   const animationFrameRef = useRef<number | null>(null);
   const speechSynthesisRef = useRef<SpeechSynthesisUtterance | null>(null);
   const wasListeningRef = useRef<boolean>(false);
+  const lastSpeechEndTimeRef = useRef<number>(0);
 
   // Initialize Socket.io connection and create session once
   useEffect(() => {
@@ -137,6 +143,22 @@ export default function SimpleAudioRecorder({
     animationFrameRef.current = requestAnimationFrame(visualizeAudio);
   };
 
+  // Calculate microphone RMS (Root Mean Square) for silence detection
+  const getMicrophoneRMS = (): number => {
+    if (!analyserRef.current) return 0;
+
+    const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+    analyserRef.current.getByteTimeDomainData(dataArray);
+
+    let sum = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+      const normalized = (dataArray[i] - 128) / 128;
+      sum += normalized * normalized;
+    }
+
+    return Math.sqrt(sum / dataArray.length);
+  };
+
   const startListening = async () => {
     try {
       setError('');
@@ -195,6 +217,38 @@ export default function SimpleAudioRecorder({
           // Skip if audio is too small (less than 1KB)
           if (arrayBuffer.byteLength < 1000) {
             console.log('⏭️ Skipping small audio chunk');
+
+            // Restart recording for next chunk
+            if (
+              mediaRecorderRef.current &&
+              mediaRecorderRef.current.state === 'inactive'
+            ) {
+              mediaRecorderRef.current.start();
+            }
+            return;
+          }
+
+          // Check if speech synthesis is currently playing (real-time TTS detection)
+          if (window.speechSynthesis && window.speechSynthesis.speaking) {
+            console.log('⏭️ Skipping audio chunk - TTS is actively speaking');
+
+            // Restart recording for next chunk
+            if (
+              mediaRecorderRef.current &&
+              mediaRecorderRef.current.state === 'inactive'
+            ) {
+              mediaRecorderRef.current.start();
+            }
+            return;
+          }
+
+          // Skip audio captured too soon after AI speech ended (within 3 seconds)
+          // This prevents feedback loop from AI's own voice
+          const timeSinceLastSpeech = Date.now() - lastSpeechEndTimeRef.current;
+          if (lastSpeechEndTimeRef.current > 0 && timeSinceLastSpeech < 3000) {
+            console.log(
+              `⏭️ Skipping audio chunk captured ${timeSinceLastSpeech}ms after AI speech (feedback prevention)`
+            );
 
             // Restart recording for next chunk
             if (
@@ -307,13 +361,13 @@ export default function SimpleAudioRecorder({
   };
 
   const pauseListening = () => {
-    // Pause recording by stopping the MediaRecorder
+    // Stop MediaRecorder completely to prevent audio capture
     if (
       mediaRecorderRef.current &&
       mediaRecorderRef.current.state === 'recording'
     ) {
-      mediaRecorderRef.current.pause();
-      console.log('⏸️ Listening paused');
+      mediaRecorderRef.current.stop();
+      console.log('⏸️ Listening paused (stopped recording)');
     }
 
     // Clear recording interval temporarily
@@ -324,16 +378,32 @@ export default function SimpleAudioRecorder({
       clearInterval((mediaRecorderRef.current as any).recordingInterval);
       (mediaRecorderRef.current as any).recordingInterval = null;
     }
+
+    // Mute audio tracks to prevent feedback
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = false;
+      });
+      console.log('🔇 Microphone muted');
+    }
   };
 
   const resumeListening = () => {
-    // Resume recording
+    // Unmute audio tracks
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = true;
+      });
+      console.log('🔊 Microphone unmuted');
+    }
+
+    // Restart MediaRecorder
     if (
       mediaRecorderRef.current &&
-      mediaRecorderRef.current.state === 'paused'
+      mediaRecorderRef.current.state === 'inactive'
     ) {
-      mediaRecorderRef.current.resume();
-      console.log('▶️ Listening resumed');
+      mediaRecorderRef.current.start();
+      console.log('▶️ Listening resumed (recording started)');
 
       // Restart the interval for chunking
       const recordingInterval = setInterval(() => {
@@ -347,6 +417,51 @@ export default function SimpleAudioRecorder({
 
       (mediaRecorderRef.current as any).recordingInterval = recordingInterval;
     }
+  };
+
+  // Adaptive resume logic - checks multiple conditions before resuming
+  const resumeWhenReady = (startTime: number = Date.now()) => {
+    // Safety check: Maximum wait time to prevent infinite loops
+    const timeWaiting = Date.now() - startTime;
+    if (timeWaiting >= MAX_RESUME_WAIT) {
+      console.log(
+        '⚠️ Maximum resume wait time reached - forcing resume'
+      );
+      resumeListening();
+      return;
+    }
+
+    // Check 1: Is TTS still speaking?
+    if (window.speechSynthesis && window.speechSynthesis.speaking) {
+      console.log('🔄 Waiting for TTS to finish...');
+      setTimeout(() => resumeWhenReady(startTime), 500);
+      return;
+    }
+
+    // Check 2: Is microphone picking up audio above silence threshold?
+    const micLevel = getMicrophoneRMS();
+    if (micLevel > SILENCE_THRESHOLD) {
+      console.log(
+        `🔄 Waiting for silence... (mic level: ${micLevel.toFixed(3)})`
+      );
+      setTimeout(() => resumeWhenReady(startTime), 500);
+      return;
+    }
+
+    // Check 3: Has minimum delay passed since speech ended?
+    const timeSinceEnd = Date.now() - lastSpeechEndTimeRef.current;
+    if (timeSinceEnd < MIN_SILENCE_DURATION) {
+      const remainingWait = MIN_SILENCE_DURATION - timeSinceEnd;
+      console.log(
+        `🔄 Waiting for minimum delay... (${remainingWait}ms remaining)`
+      );
+      setTimeout(() => resumeWhenReady(startTime), remainingWait);
+      return;
+    }
+
+    // All checks passed - safe to resume
+    console.log('✅ All safety checks passed - resuming listening');
+    resumeListening();
   };
 
   const speakText = (text: string) => {
@@ -386,16 +501,26 @@ export default function SimpleAudioRecorder({
       utterance.voice = englishVoice;
     }
 
+    // Handle speech start event - immediate state tracking
+    utterance.onstart = () => {
+      console.log('🎙️ TTS playback started');
+      setIsSpeaking(true);
+    };
+
     // Handle speech end event
     utterance.onend = () => {
       console.log('✅ Speech finished');
       setIsSpeaking(false);
       speechSynthesisRef.current = null;
 
-      // Resume microphone if it was listening before
+      // Record when speech ended
+      lastSpeechEndTimeRef.current = Date.now();
+
+      // Use adaptive resume logic instead of fixed delay
       if (wasListeningRef.current) {
         wasListeningRef.current = false;
-        resumeListening();
+        console.log('🔄 Initiating adaptive resume checks...');
+        resumeWhenReady();
       }
     };
 
@@ -405,10 +530,14 @@ export default function SimpleAudioRecorder({
       setIsSpeaking(false);
       speechSynthesisRef.current = null;
 
-      // Resume microphone even on error
+      // Record when speech ended
+      lastSpeechEndTimeRef.current = Date.now();
+
+      // Use adaptive resume logic even on error
       if (wasListeningRef.current) {
         wasListeningRef.current = false;
-        resumeListening();
+        console.log('🔄 Initiating adaptive resume checks after error...');
+        resumeWhenReady();
       }
     };
 
