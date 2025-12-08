@@ -39,16 +39,6 @@ const io = new Server(httpServer, {
 // Store active sessions
 const activeSessions = new Map();
 
-// Audio chunk buffer storage (stores chunks temporarily before processing)
-const audioBuffers = new Map();
-
-// Track accumulated audio data per session for batching
-const sessionAudioAccumulator = new Map();
-
-// Minimum audio duration for STT processing (in seconds)
-const MIN_AUDIO_DURATION = 5;
-const CHUNK_DURATION = 1; // Each chunk is 1 second
-
 console.log('🚀 Socket.io server starting...');
 
 io.on('connection', (socket) => {
@@ -62,13 +52,7 @@ io.on('connection', (socket) => {
     activeSessions.set(socket.id, {
       sessionId,
       startTime: Date.now(),
-      chunksReceived: 0,
     });
-
-    // Initialize audio buffer for this session
-    if (!audioBuffers.has(sessionId)) {
-      audioBuffers.set(sessionId, []);
-    }
 
     // Send acknowledgment
     socket.emit('session-started', {
@@ -77,8 +61,8 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Handle audio chunk
-  socket.on('audio-chunk', async ({ sessionId, audioData, metadata }) => {
+  // Handle audio data - process immediately when recording stops
+  socket.on('audio-data', async ({ sessionId, audioData }) => {
     const session = activeSessions.get(socket.id);
 
     if (!session || session.sessionId !== sessionId) {
@@ -86,64 +70,15 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Increment chunk counter
-    session.chunksReceived++;
-
     console.log(
-      `🎵 Audio chunk received for session: ${sessionId} (chunk #${session.chunksReceived})`
+      `🎵 Audio data received for session: ${sessionId} (${audioData.length} bytes)`
     );
 
-    // Store audio chunk in buffer
-    const buffer = audioBuffers.get(sessionId) || [];
-    buffer.push({
-      data: audioData,
-      timestamp: Date.now(),
-      metadata,
-    });
-    audioBuffers.set(sessionId, buffer);
+    // Emit processing started
+    socket.emit('processing-started', { sessionId });
 
-    // Send acknowledgment immediately (non-blocking)
-    socket.emit('chunk-received', {
-      chunkNumber: session.chunksReceived,
-      timestamp: Date.now(),
-    });
-
-    // Initialize accumulator for this session if not exists
-    if (!sessionAudioAccumulator.has(sessionId)) {
-      sessionAudioAccumulator.set(sessionId, {
-        chunks: [],
-        chunkCount: 0,
-        isProcessing: false,
-      });
-    }
-
-    const accumulator = sessionAudioAccumulator.get(sessionId);
-
-    // Add chunk to accumulator
-    accumulator.chunks.push(audioData);
-    accumulator.chunkCount++;
-
-    // Process audio asynchronously every MIN_AUDIO_DURATION seconds
-    // This allows continuous audio intake without blocking
-    if (
-      accumulator.chunkCount >= MIN_AUDIO_DURATION &&
-      !accumulator.isProcessing
-    ) {
-      // Set processing flag
-      accumulator.isProcessing = true;
-
-      // Get accumulated audio data
-      const accumulatedAudio = accumulator.chunks.flat();
-
-      // Clear accumulator for next batch
-      accumulator.chunks = [];
-      accumulator.chunkCount = 0;
-
-      // Process asynchronously (non-blocking)
-      processAudioAsync(sessionId, accumulatedAudio).finally(() => {
-        accumulator.isProcessing = false;
-      });
-    }
+    // Process audio immediately
+    await processAudioAsync(sessionId, audioData, socket);
   });
 
   // Handle session stop
@@ -152,27 +87,8 @@ io.on('connection', (socket) => {
 
     const session = activeSessions.get(socket.id);
     if (session) {
-      // Process any remaining audio chunks before stopping
-      const accumulator = sessionAudioAccumulator.get(sessionId);
-      if (
-        accumulator &&
-        accumulator.chunks.length > 0 &&
-        !accumulator.isProcessing
-      ) {
-        console.log(
-          `🔄 Processing remaining ${accumulator.chunks.length} chunks before stopping`
-        );
-        const remainingAudio = accumulator.chunks.flat();
-        await processAudioAsync(sessionId, remainingAudio);
-      }
-
-      // Clean up
-      sessionAudioAccumulator.delete(sessionId);
-      audioBuffers.delete(sessionId);
-
       socket.emit('session-stopped', {
         sessionId,
-        chunksReceived: session.chunksReceived,
         duration: Date.now() - session.startTime,
       });
 
